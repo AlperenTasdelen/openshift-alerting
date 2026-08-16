@@ -1,0 +1,117 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: cluster-twistlock-alerts
+  namespace: openshift-monitoring
+spec:
+  groups:
+  - name: cluster-twistlock-recording-rules
+    rules:
+    - expr: |
+        (
+          sum(kube_daemonset_status_number_unavailable{namespace="twistlock"})
+          /
+          sum(kube_daemonset_status_desired_number_scheduled{namespace="twistlock"})
+        ) * 100
+      record: cluster:twistlock_defender_unavailable:percent
+  - name: cluster-twistlock-defender-alerts
+    rules:
+    - alert: ClusterTwistlockDefenderUnavailableLow
+      annotations:
+        description: '{{ $value | printf "%.2f" }}% of Twistlock Defender pods are
+          unavailable for more than 10 minutes. Runtime protection and vulnerability
+          monitoring are inactive on affected nodes.'
+        summary: Twistlock Defender unavailability is above 0%
+      expr: |
+        cluster:twistlock_defender_unavailable:percent > 0
+      for: 10m
+      labels:
+        category: twistlock
+        metric: defender_availability
+        scope: cluster
+        severity: low
+    - alert: ClusterTwistlockDefenderUnavailableMedium
+      annotations:
+        description: '{{ $value | printf "%.2f" }}% of Twistlock Defender pods are
+          unavailable for more than 10 minutes. Runtime protection and vulnerability
+          monitoring are inactive on affected nodes.'
+        summary: Twistlock Defender unavailability is above 10%
+      expr: |
+        cluster:twistlock_defender_unavailable:percent > 10
+      for: 10m
+      labels:
+        category: twistlock
+        metric: defender_availability
+        scope: cluster
+        severity: medium
+    - alert: ClusterTwistlockDefenderUnavailableHigh
+      annotations:
+        description: '{{ $value | printf "%.2f" }}% of Twistlock Defender pods are
+          unavailable for more than 10 minutes. Runtime protection and vulnerability
+          monitoring are inactive on affected nodes.'
+        summary: Twistlock Defender unavailability is above 25%
+      expr: |
+        cluster:twistlock_defender_unavailable:percent > 25
+      for: 10m
+      labels:
+        category: twistlock
+        metric: defender_availability
+        scope: cluster
+        severity: high
+    - alert: ClusterTwistlockDefenderUnavailableCritical
+      annotations:
+        description: '{{ $value | printf "%.2f" }}% of Twistlock Defender pods are
+          unavailable for more than 5 minutes. Cluster-wide runtime security coverage
+          is severely degraded.'
+        summary: Twistlock Defender unavailability is above 50%
+      expr: |
+        cluster:twistlock_defender_unavailable:percent > 50
+      for: 5m
+      labels:
+        category: twistlock
+        metric: defender_availability
+        scope: cluster
+        severity: critical
+    - alert: ClusterTwistlockDefenderAbsent
+      annotations:
+        description: No Twistlock Defender DaemonSet is registered in namespace twistlock
+          for more than 15 minutes. Either the Defender deployment was removed or
+          kube-state-metrics cannot see it. The cluster is running without runtime
+          security coverage.
+        summary: Twistlock Defender DaemonSet not found
+      expr: |
+        absent(kube_daemonset_status_desired_number_scheduled{namespace="twistlock"})
+      for: 15m
+      labels:
+        category: twistlock
+        metric: defender_presence
+        scope: cluster
+        severity: high
+  - name: cluster-twistlock-pod-restart-alerts
+    rules:
+    - alert: ClusterTwistlockPodRestartsMedium
+      annotations:
+        description: 'Pod {{ $labels.pod }} in namespace twistlock restarted {{ $value
+          | printf "%.0f" }} times in the last hour.'
+        summary: Twistlock pod restarted more than 3 times in 1 hour
+      expr: |
+        increase(kube_pod_container_status_restarts_total{namespace="twistlock"}[1h]) > 3
+      for: 5m
+      labels:
+        category: twistlock
+        metric: pod_restarts
+        scope: cluster
+        severity: medium
+    - alert: ClusterTwistlockPodRestartsCritical
+      annotations:
+        description: 'Pod {{ $labels.pod }} in namespace twistlock restarted {{ $value
+          | printf "%.0f" }} times in the last hour. Defender is crash-looping.'
+        summary: Twistlock pod restarted more than 10 times in 1 hour
+      expr: |
+        increase(kube_pod_container_status_restarts_total{namespace="twistlock"}[1h]) > 10
+      for: 5m
+      labels:
+        category: twistlock
+        metric: pod_restarts
+        scope: cluster
+        severity: critical

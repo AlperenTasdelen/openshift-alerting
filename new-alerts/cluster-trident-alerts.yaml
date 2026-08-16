@@ -1,0 +1,182 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: cluster-trident-alerts
+  namespace: openshift-monitoring
+spec:
+  groups:
+  - name: cluster-trident-recording-rules
+    rules:
+    - expr: |
+        (
+          sum(kube_daemonset_status_number_unavailable{namespace="trident"})
+          /
+          sum(kube_daemonset_status_desired_number_scheduled{namespace="trident"})
+        ) * 100
+      record: cluster:trident_node_unavailable:percent
+  - name: cluster-trident-controller-alerts
+    rules:
+    - alert: ClusterTridentControllerDown
+      annotations:
+        description: Trident controller deployment in namespace trident has no available
+          replicas for more than 5 minutes. Volume provisioning, resize, snapshot
+          and attach/detach operations are NOT possible. Existing mounted volumes
+          continue to work.
+        summary: Trident CSI controller is down
+      expr: |
+        kube_deployment_status_replicas_available{namespace="trident",deployment=~"trident-controller|trident-csi"} == 0
+      for: 5m
+      labels:
+        category: trident
+        metric: controller_availability
+        scope: cluster
+        severity: critical
+    - alert: ClusterTridentOperatorDown
+      annotations:
+        description: trident-operator deployment has no available replicas for more
+          than 15 minutes. Trident lifecycle management (upgrade, self-healing of
+          Trident components) is not functioning.
+        summary: Trident operator is down
+      expr: |
+        kube_deployment_status_replicas_available{namespace="trident",deployment="trident-operator"} == 0
+      for: 15m
+      labels:
+        category: trident
+        metric: operator_availability
+        scope: cluster
+        severity: high
+  - name: cluster-trident-node-alerts
+    rules:
+    - alert: ClusterTridentNodeUnavailableLow
+      annotations:
+        description: '{{ $value | printf "%.2f" }}% of trident node (DaemonSet) pods
+          are unavailable for more than 10 minutes. Volume mount/unmount operations
+          fail on affected nodes.'
+        summary: Trident node pod unavailability is above 0%
+      expr: |
+        cluster:trident_node_unavailable:percent > 0
+      for: 10m
+      labels:
+        category: trident
+        metric: node_availability
+        scope: cluster
+        severity: low
+    - alert: ClusterTridentNodeUnavailableHigh
+      annotations:
+        description: '{{ $value | printf "%.2f" }}% of trident node (DaemonSet) pods
+          are unavailable for more than 10 minutes. Volume mount/unmount operations
+          fail on affected nodes.'
+        summary: Trident node pod unavailability is above 25%
+      expr: |
+        cluster:trident_node_unavailable:percent > 25
+      for: 10m
+      labels:
+        category: trident
+        metric: node_availability
+        scope: cluster
+        severity: high
+    - alert: ClusterTridentNodeUnavailableCritical
+      annotations:
+        description: '{{ $value | printf "%.2f" }}% of trident node (DaemonSet) pods
+          are unavailable for more than 5 minutes. Volume mount operations are failing
+          cluster-wide.'
+        summary: Trident node pod unavailability is above 50%
+      expr: |
+        cluster:trident_node_unavailable:percent > 50
+      for: 5m
+      labels:
+        category: trident
+        metric: node_availability
+        scope: cluster
+        severity: critical
+  - name: cluster-trident-backend-alerts
+    rules:
+    # Requires Trident native metrics to be scraped (ServiceMonitor on trident-csi
+    # service, port metrics/8001). trident_backend_state: 1=online, other=not online.
+    - alert: ClusterTridentBackendNotOnline
+      annotations:
+        description: 'Trident backend {{ $labels.backend }} (UUID {{ $labels.backend_uuid
+          }}) is not in online state for more than 5 minutes (state value: {{ $value
+          | printf "%.0f" }}). New volume provisioning against this ONTAP backend
+          will fail.'
+        summary: Trident storage backend is not online
+      expr: |
+        trident_backend_state != 1
+      for: 5m
+      labels:
+        category: trident
+        metric: backend_state
+        scope: cluster
+        severity: critical
+    - alert: ClusterTridentMetricsAbsent
+      annotations:
+        description: Trident native metrics (trident_backend_count) are not present
+          in Prometheus for more than 30 minutes. Either Trident is down or the ServiceMonitor
+          scraping trident-csi:8001/metrics is missing/broken. Backend health cannot
+          be monitored.
+        summary: Trident metrics are not being scraped
+      expr: |
+        absent(trident_backend_count)
+      for: 30m
+      labels:
+        category: trident
+        metric: metrics_presence
+        scope: cluster
+        severity: medium
+  - name: cluster-trident-volume-alerts
+    rules:
+    - alert: ClusterPersistentVolumeFailed
+      annotations:
+        description: '{{ $value | printf "%.0f" }} PersistentVolume(s) are in Failed
+          phase for more than 5 minutes.'
+        summary: One or more PersistentVolumes are in Failed state
+      expr: |
+        sum(kube_persistentvolume_status_phase{phase="Failed"}) > 0
+      for: 5m
+      labels:
+        category: trident
+        metric: pv_state
+        scope: cluster
+        severity: high
+    - alert: NamespacePersistentVolumeClaimPending
+      annotations:
+        description: 'PVC {{ $labels.persistentvolumeclaim }} in namespace {{ $labels.namespace
+          }} has been in Pending phase for more than 15 minutes. Provisioning may
+          be failing - check Trident controller logs and backend state.'
+        summary: PVC stuck in Pending state
+      expr: |
+        kube_persistentvolumeclaim_status_phase{phase="Pending"} == 1
+      for: 15m
+      labels:
+        category: trident
+        metric: pvc_state
+        scope: namespace
+        severity: medium
+  - name: cluster-trident-pod-restart-alerts
+    rules:
+    - alert: ClusterTridentPodRestartsMedium
+      annotations:
+        description: 'Pod {{ $labels.pod }} in namespace trident restarted {{ $value
+          | printf "%.0f" }} times in the last hour.'
+        summary: Trident pod restarted more than 3 times in 1 hour
+      expr: |
+        increase(kube_pod_container_status_restarts_total{namespace="trident"}[1h]) > 3
+      for: 5m
+      labels:
+        category: trident
+        metric: pod_restarts
+        scope: cluster
+        severity: medium
+    - alert: ClusterTridentPodRestartsCritical
+      annotations:
+        description: 'Pod {{ $labels.pod }} in namespace trident restarted {{ $value
+          | printf "%.0f" }} times in the last hour. Trident component is crash-looping.'
+        summary: Trident pod restarted more than 10 times in 1 hour
+      expr: |
+        increase(kube_pod_container_status_restarts_total{namespace="trident"}[1h]) > 10
+      for: 5m
+      labels:
+        category: trident
+        metric: pod_restarts
+        scope: cluster
+        severity: critical

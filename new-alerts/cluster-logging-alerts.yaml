@@ -1,0 +1,251 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: cluster-logging-alerts
+  namespace: openshift-monitoring
+spec:
+  groups:
+  - name: cluster-logging-recording-rules
+    rules:
+    - expr: |
+        (
+          sum(kube_daemonset_status_number_unavailable{namespace="openshift-logging"})
+          /
+          sum(kube_daemonset_status_desired_number_scheduled{namespace="openshift-logging"})
+        ) * 100
+      record: cluster:logging_collector_unavailable:percent
+    - expr: |
+        sum(rate(vector_component_errors_total{namespace="openshift-logging"}[5m]))
+      record: cluster:vector_component_errors:rate5m
+    - expr: |
+        sum(rate(vector_component_errors_total{namespace="openshift-logging",component_kind="sink"}[5m]))
+      record: cluster:vector_sink_errors:rate5m
+    - expr: |
+        sum(rate(vector_component_received_events_total{namespace="openshift-logging"}[5m]))
+      record: cluster:vector_received_events:rate5m
+    - expr: |
+        sum(rate(vector_component_sent_events_total{namespace="openshift-logging",component_kind="sink"}[5m]))
+      record: cluster:vector_sent_events:rate5m
+    - expr: |
+        sum(rate(vector_buffer_discarded_events_total{namespace="openshift-logging"}[5m]))
+      record: cluster:vector_buffer_discarded_events:rate5m
+  - name: cluster-logging-operator-alerts
+    rules:
+    - alert: ClusterLoggingOperatorDown
+      annotations:
+        description: cluster-logging-operator deployment in openshift-logging has
+          no available replicas for more than 10 minutes. Log collection configuration
+          changes (ClusterLogForwarder) cannot be reconciled.
+        summary: Cluster Logging Operator is down
+      expr: |
+        kube_deployment_status_replicas_available{namespace="openshift-logging",deployment="cluster-logging-operator"} == 0
+      for: 10m
+      labels:
+        category: logging
+        metric: operator_availability
+        scope: cluster
+        severity: critical
+  - name: cluster-logging-collector-availability-alerts
+    rules:
+    - alert: ClusterLoggingCollectorUnavailableLow
+      annotations:
+        description: '{{ $value | printf "%.2f" }}% of logging collector (Vector)
+          pods are unavailable for more than 10 minutes. Logs from affected nodes
+          are not being forwarded to Splunk.'
+        summary: Logging collector unavailability is above 0%
+      expr: |
+        cluster:logging_collector_unavailable:percent > 0
+      for: 10m
+      labels:
+        category: logging
+        metric: collector_availability
+        scope: cluster
+        severity: low
+    - alert: ClusterLoggingCollectorUnavailableMedium
+      annotations:
+        description: '{{ $value | printf "%.2f" }}% of logging collector (Vector)
+          pods are unavailable for more than 10 minutes. Logs from affected nodes
+          are not being forwarded to Splunk.'
+        summary: Logging collector unavailability is above 10%
+      expr: |
+        cluster:logging_collector_unavailable:percent > 10
+      for: 10m
+      labels:
+        category: logging
+        metric: collector_availability
+        scope: cluster
+        severity: medium
+    - alert: ClusterLoggingCollectorUnavailableHigh
+      annotations:
+        description: '{{ $value | printf "%.2f" }}% of logging collector (Vector)
+          pods are unavailable for more than 10 minutes. Logs from affected nodes
+          are not being forwarded to Splunk.'
+        summary: Logging collector unavailability is above 25%
+      expr: |
+        cluster:logging_collector_unavailable:percent > 25
+      for: 10m
+      labels:
+        category: logging
+        metric: collector_availability
+        scope: cluster
+        severity: high
+    - alert: ClusterLoggingCollectorUnavailableCritical
+      annotations:
+        description: '{{ $value | printf "%.2f" }}% of logging collector (Vector)
+          pods are unavailable for more than 5 minutes. Cluster-wide log collection
+          is severely degraded.'
+        summary: Logging collector unavailability is above 50%
+      expr: |
+        cluster:logging_collector_unavailable:percent > 50
+      for: 5m
+      labels:
+        category: logging
+        metric: collector_availability
+        scope: cluster
+        severity: critical
+  - name: cluster-logging-collector-error-alerts
+    rules:
+    - alert: ClusterLoggingVectorComponentErrorsLow
+      annotations:
+        description: 'Vector collector component error rate is {{ $value | printf
+          "%.2f" }} errors/sec for more than 15 minutes. Check collector pod logs
+          in openshift-logging.'
+        summary: Vector component error rate is above 0.1 errors/sec
+      expr: |
+        cluster:vector_component_errors:rate5m > 0.1
+      for: 15m
+      labels:
+        category: logging
+        metric: component_errors
+        scope: cluster
+        severity: low
+    - alert: ClusterLoggingVectorComponentErrorsMedium
+      annotations:
+        description: 'Vector collector component error rate is {{ $value | printf
+          "%.2f" }} errors/sec for more than 15 minutes. Check collector pod logs
+          in openshift-logging.'
+        summary: Vector component error rate is above 1 errors/sec
+      expr: |
+        cluster:vector_component_errors:rate5m > 1
+      for: 15m
+      labels:
+        category: logging
+        metric: component_errors
+        scope: cluster
+        severity: medium
+    - alert: ClusterLoggingVectorComponentErrorsHigh
+      annotations:
+        description: 'Vector collector component error rate is {{ $value | printf
+          "%.2f" }} errors/sec for more than 10 minutes. Check collector pod logs
+          in openshift-logging.'
+        summary: Vector component error rate is above 5 errors/sec
+      expr: |
+        cluster:vector_component_errors:rate5m > 5
+      for: 10m
+      labels:
+        category: logging
+        metric: component_errors
+        scope: cluster
+        severity: high
+    - alert: ClusterLoggingVectorComponentErrorsCritical
+      annotations:
+        description: 'Vector collector component error rate is {{ $value | printf
+          "%.2f" }} errors/sec for more than 5 minutes. Log pipeline is failing at
+          a high rate.'
+        summary: Vector component error rate is above 20 errors/sec
+      expr: |
+        cluster:vector_component_errors:rate5m > 20
+      for: 5m
+      labels:
+        category: logging
+        metric: component_errors
+        scope: cluster
+        severity: critical
+  - name: cluster-logging-forwarding-alerts
+    rules:
+    - alert: ClusterLoggingSinkErrorsHigh
+      annotations:
+        description: 'Vector sink (output, e.g. Splunk HEC) error rate is {{ $value
+          | printf "%.2f" }} errors/sec for more than 10 minutes. Log delivery to
+          the configured outputs is failing. Check ClusterLogForwarder outputs, Splunk
+          HEC endpoint/token and network connectivity.'
+        summary: Log forwarding output errors are above 0.1 errors/sec
+      expr: |
+        cluster:vector_sink_errors:rate5m > 0.1
+      for: 10m
+      labels:
+        category: logging
+        metric: forwarding_errors
+        scope: cluster
+        severity: high
+    - alert: ClusterLoggingForwardingStalled
+      annotations:
+        description: Collectors are receiving log events but no events have been
+          sent to any output (Splunk) for more than 10 minutes. Log forwarding is
+          completely stalled.
+        summary: Log forwarding to outputs has stalled
+      expr: |
+        cluster:vector_sent_events:rate5m == 0
+        and
+        cluster:vector_received_events:rate5m > 0
+      for: 10m
+      labels:
+        category: logging
+        metric: forwarding_throughput
+        scope: cluster
+        severity: critical
+    - alert: ClusterLoggingBufferDiscardedEventsHigh
+      annotations:
+        description: 'Vector is discarding {{ $value | printf "%.2f" }} events/sec
+          from its buffers for more than 10 minutes. Logs are being lost, likely because
+          outputs (Splunk) cannot keep up or are unreachable.'
+        summary: Log events are being discarded from collector buffers
+      expr: |
+        cluster:vector_buffer_discarded_events:rate5m > 0
+      for: 10m
+      labels:
+        category: logging
+        metric: buffer_discarded
+        scope: cluster
+        severity: high
+    - alert: ClusterLoggingBufferDiscardedEventsCritical
+      annotations:
+        description: 'Vector is discarding {{ $value | printf "%.2f" }} events/sec
+          from its buffers for more than 5 minutes. Significant log loss is occurring.'
+        summary: Log events are being discarded at a high rate (above 100 events/sec)
+      expr: |
+        cluster:vector_buffer_discarded_events:rate5m > 100
+      for: 5m
+      labels:
+        category: logging
+        metric: buffer_discarded
+        scope: cluster
+        severity: critical
+  - name: cluster-logging-pod-restart-alerts
+    rules:
+    - alert: ClusterLoggingPodRestartsMedium
+      annotations:
+        description: 'Pod {{ $labels.pod }} in openshift-logging restarted {{ $value
+          | printf "%.0f" }} times in the last hour.'
+        summary: Logging pod restarted more than 3 times in 1 hour
+      expr: |
+        increase(kube_pod_container_status_restarts_total{namespace="openshift-logging"}[1h]) > 3
+      for: 5m
+      labels:
+        category: logging
+        metric: pod_restarts
+        scope: cluster
+        severity: medium
+    - alert: ClusterLoggingPodRestartsCritical
+      annotations:
+        description: 'Pod {{ $labels.pod }} in openshift-logging restarted {{ $value
+          | printf "%.0f" }} times in the last hour. Collector or operator is crash-looping.'
+        summary: Logging pod restarted more than 10 times in 1 hour
+      expr: |
+        increase(kube_pod_container_status_restarts_total{namespace="openshift-logging"}[1h]) > 10
+      for: 5m
+      labels:
+        category: logging
+        metric: pod_restarts
+        scope: cluster
+        severity: critical

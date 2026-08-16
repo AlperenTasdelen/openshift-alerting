@@ -1,0 +1,241 @@
+# GPU-suz kumelerde DCGM_* metrikleri bulunmadigi icin DCGM tabanli alarmlar
+# otomatik olarak pasif kalir (no-op). Workload-saglik alarmlari da
+# nvidia-gpu-operator namespace'i yoksa tetiklenmez.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: cluster-nvidia-gpu-alerts
+  namespace: openshift-monitoring
+spec:
+  groups:
+  - name: cluster-nvidia-gpu-recording-rules
+    rules:
+    - expr: |
+        avg(DCGM_FI_DEV_GPU_UTIL)
+      record: cluster:gpu_utilization:avg
+    - expr: |
+        avg by (Hostname, gpu) (DCGM_FI_DEV_GPU_UTIL)
+      record: node:gpu_utilization:avg
+    - expr: |
+        (
+          sum by (Hostname, gpu) (DCGM_FI_DEV_FB_USED)
+          /
+          (
+            sum by (Hostname, gpu) (DCGM_FI_DEV_FB_USED)
+            +
+            sum by (Hostname, gpu) (DCGM_FI_DEV_FB_FREE)
+          )
+        ) * 100
+      record: node:gpu_memory_utilization:percent
+    - expr: |
+        sum(kube_node_status_allocatable{resource="nvidia_com_gpu"})
+      record: cluster:gpu_allocatable:count
+    - expr: |
+        sum(kube_node_status_capacity{resource="nvidia_com_gpu"})
+      record: cluster:gpu_capacity:count
+  - name: cluster-nvidia-operator-alerts
+    rules:
+    - alert: ClusterNvidiaGpuOperatorDown
+      annotations:
+        description: gpu-operator deployment in nvidia-gpu-operator namespace has
+          no available replicas for more than 15 minutes. GPU stack lifecycle management
+          (driver, device plugin, DCGM) is not reconciled.
+        summary: NVIDIA GPU operator is down
+      expr: |
+        kube_deployment_status_replicas_available{namespace="nvidia-gpu-operator",deployment="gpu-operator"} == 0
+      for: 15m
+      labels:
+        category: nvidia
+        metric: operator_availability
+        scope: cluster
+        severity: high
+    - alert: ClusterNvidiaDaemonsetUnavailable
+      annotations:
+        description: 'DaemonSet {{ $labels.daemonset }} in nvidia-gpu-operator namespace
+          has {{ $value | printf "%.0f" }} unavailable pod(s) for more than 15 minutes.
+          GPU stack (driver/device-plugin/toolkit/DCGM) is degraded on affected nodes;
+          GPU workloads may fail to schedule or run.'
+        summary: NVIDIA GPU stack DaemonSet has unavailable pods
+      expr: |
+        kube_daemonset_status_number_unavailable{namespace="nvidia-gpu-operator"} > 0
+      for: 15m
+      labels:
+        category: nvidia
+        metric: daemonset_availability
+        scope: cluster
+        severity: high
+  - name: cluster-nvidia-gpu-capacity-alerts
+    rules:
+    - alert: ClusterGpuAllocatableBelowCapacity
+      annotations:
+        description: 'Allocatable GPU count ({{ $value | printf "%.0f" }}) is below
+          total GPU capacity for more than 15 minutes. One or more GPUs dropped out
+          of scheduling (driver failure, device plugin issue or unhealthy GPU).'
+        summary: Allocatable GPUs below hardware capacity
+      expr: |
+        cluster:gpu_allocatable:count < cluster:gpu_capacity:count
+      for: 15m
+      labels:
+        category: nvidia
+        metric: gpu_capacity
+        scope: cluster
+        severity: high
+    - alert: ClusterDcgmMetricsAbsentOnGpuCluster
+      annotations:
+        description: Cluster reports NVIDIA GPU capacity but DCGM metrics (DCGM_FI_DEV_GPU_UTIL)
+          are absent for more than 30 minutes. dcgm-exporter is down or not scraped;
+          GPU health is not being monitored.
+        summary: DCGM metrics missing on a GPU cluster
+      expr: |
+        (cluster:gpu_capacity:count > 0)
+        and
+        absent(DCGM_FI_DEV_GPU_UTIL)
+      for: 30m
+      labels:
+        category: nvidia
+        metric: metrics_presence
+        scope: cluster
+        severity: medium
+  - name: node-nvidia-gpu-temperature-alerts
+    rules:
+    - alert: NodeGpuTemperatureLow
+      annotations:
+        description: 'GPU {{ $labels.gpu }} on node {{ $labels.Hostname }} temperature
+          is {{ $value | printf "%.0f" }}C for more than 10 minutes.'
+        summary: GPU temperature is above 78C
+      expr: |
+        DCGM_FI_DEV_GPU_TEMP > 78
+      for: 10m
+      labels:
+        category: nvidia
+        metric: gpu_temperature
+        scope: node
+        severity: low
+    - alert: NodeGpuTemperatureMedium
+      annotations:
+        description: 'GPU {{ $labels.gpu }} on node {{ $labels.Hostname }} temperature
+          is {{ $value | printf "%.0f" }}C for more than 10 minutes.'
+        summary: GPU temperature is above 83C
+      expr: |
+        DCGM_FI_DEV_GPU_TEMP > 83
+      for: 10m
+      labels:
+        category: nvidia
+        metric: gpu_temperature
+        scope: node
+        severity: medium
+    - alert: NodeGpuTemperatureHigh
+      annotations:
+        description: 'GPU {{ $labels.gpu }} on node {{ $labels.Hostname }} temperature
+          is {{ $value | printf "%.0f" }}C for more than 5 minutes. Thermal throttling
+          likely; check cooling.'
+        summary: GPU temperature is above 88C
+      expr: |
+        DCGM_FI_DEV_GPU_TEMP > 88
+      for: 5m
+      labels:
+        category: nvidia
+        metric: gpu_temperature
+        scope: node
+        severity: high
+    - alert: NodeGpuTemperatureCritical
+      annotations:
+        description: 'GPU {{ $labels.gpu }} on node {{ $labels.Hostname }} temperature
+          is {{ $value | printf "%.0f" }}C for more than 2 minutes. Risk of hardware
+          damage / forced shutdown.'
+        summary: GPU temperature is above 92C
+      expr: |
+        DCGM_FI_DEV_GPU_TEMP > 92
+      for: 2m
+      labels:
+        category: nvidia
+        metric: gpu_temperature
+        scope: node
+        severity: critical
+  - name: node-nvidia-gpu-memory-alerts
+    rules:
+    - alert: NodeGpuMemoryUtilizationLow
+      annotations:
+        description: 'GPU {{ $labels.gpu }} on node {{ $labels.Hostname }} framebuffer
+          memory utilization is {{ $value | printf "%.2f" }}% for more than 15 minutes.'
+        summary: GPU memory utilization is above 80%
+      expr: |
+        node:gpu_memory_utilization:percent > 80
+      for: 15m
+      labels:
+        category: nvidia
+        metric: gpu_memory
+        scope: node
+        severity: low
+    - alert: NodeGpuMemoryUtilizationHigh
+      annotations:
+        description: 'GPU {{ $labels.gpu }} on node {{ $labels.Hostname }} framebuffer
+          memory utilization is {{ $value | printf "%.2f" }}% for more than 10 minutes.
+          Workloads risk OOM on the GPU.'
+        summary: GPU memory utilization is above 90%
+      expr: |
+        node:gpu_memory_utilization:percent > 90
+      for: 10m
+      labels:
+        category: nvidia
+        metric: gpu_memory
+        scope: node
+        severity: high
+    - alert: NodeGpuMemoryUtilizationCritical
+      annotations:
+        description: 'GPU {{ $labels.gpu }} on node {{ $labels.Hostname }} framebuffer
+          memory utilization is {{ $value | printf "%.2f" }}% for more than 5 minutes.'
+        summary: GPU memory utilization is above 97%
+      expr: |
+        node:gpu_memory_utilization:percent > 97
+      for: 5m
+      labels:
+        category: nvidia
+        metric: gpu_memory
+        scope: node
+        severity: critical
+  - name: node-nvidia-gpu-error-alerts
+    rules:
+    - alert: NodeGpuXidErrorCritical
+      annotations:
+        description: 'GPU {{ $labels.gpu }} on node {{ $labels.Hostname }} reported
+          XID error code {{ $value | printf "%.0f" }}. XID errors indicate driver/hardware
+          faults (e.g. 48=DBE, 79=fell off the bus). Investigate immediately.'
+        summary: GPU reported an XID error
+      expr: |
+        DCGM_FI_DEV_XID_ERRORS > 0
+      for: 1m
+      labels:
+        category: nvidia
+        metric: gpu_xid
+        scope: node
+        severity: critical
+    - alert: NodeGpuDoubleBitEccErrorCritical
+      annotations:
+        description: 'GPU {{ $labels.gpu }} on node {{ $labels.Hostname }} recorded
+          {{ $value | printf "%.0f" }} new double-bit (uncorrectable) ECC error(s)
+          in the last 5 minutes. GPU memory is unreliable; drain GPU workloads and
+          plan hardware check.'
+        summary: GPU double-bit ECC errors detected
+      expr: |
+        increase(DCGM_FI_DEV_ECC_DBE_VOL_TOTAL[5m]) > 0
+      for: 1m
+      labels:
+        category: nvidia
+        metric: gpu_ecc
+        scope: node
+        severity: critical
+    - alert: NodeGpuSingleBitEccErrorMedium
+      annotations:
+        description: 'GPU {{ $labels.gpu }} on node {{ $labels.Hostname }} recorded
+          {{ $value | printf "%.0f" }} single-bit (corrected) ECC errors in the last
+          hour. Rising SBE count is an early sign of memory degradation.'
+        summary: GPU single-bit ECC error rate is elevated
+      expr: |
+        increase(DCGM_FI_DEV_ECC_SBE_VOL_TOTAL[1h]) > 100
+      for: 5m
+      labels:
+        category: nvidia
+        metric: gpu_ecc
+        scope: node
+        severity: medium

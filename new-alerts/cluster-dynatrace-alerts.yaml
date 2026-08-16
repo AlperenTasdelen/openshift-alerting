@@ -1,0 +1,171 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: cluster-dynatrace-alerts
+  namespace: openshift-monitoring
+spec:
+  groups:
+  - name: cluster-dynatrace-recording-rules
+    rules:
+    - expr: |
+        (
+          sum(kube_daemonset_status_number_unavailable{namespace="dynatrace"})
+          /
+          sum(kube_daemonset_status_desired_number_scheduled{namespace="dynatrace"})
+        ) * 100
+      record: cluster:dynatrace_oneagent_unavailable:percent
+  - name: cluster-dynatrace-operator-alerts
+    rules:
+    - alert: ClusterDynatraceOperatorDown
+      annotations:
+        description: dynatrace-operator deployment in namespace dynatrace has no
+          available replicas for more than 15 minutes. DynaKube reconciliation, OneAgent
+          rollout and certificate rotation are not functioning.
+        summary: Dynatrace operator is down
+      expr: |
+        kube_deployment_status_replicas_available{namespace="dynatrace",deployment="dynatrace-operator"} == 0
+      for: 15m
+      labels:
+        category: dynatrace
+        metric: operator_availability
+        scope: cluster
+        severity: high
+    - alert: ClusterDynatraceWebhookDown
+      annotations:
+        description: dynatrace-webhook deployment has no available replicas for more
+          than 10 minutes. New pods in monitored namespaces will start WITHOUT Dynatrace
+          instrumentation (failurePolicy=Ignore ile admission engellenmez, gozlemlenebilirlik
+          kaybi olusur).
+        summary: Dynatrace webhook is down
+      expr: |
+        kube_deployment_status_replicas_available{namespace="dynatrace",deployment="dynatrace-webhook"} == 0
+      for: 10m
+      labels:
+        category: dynatrace
+        metric: webhook_availability
+        scope: cluster
+        severity: high
+  - name: cluster-dynatrace-activegate-alerts
+    rules:
+    - alert: ClusterDynatraceActiveGateDegraded
+      annotations:
+        description: 'ActiveGate StatefulSet {{ $labels.statefulset }} has {{ $value
+          | printf "%.0f" }} ready replicas, fewer than desired, for more than 10
+          minutes. Kubernetes API monitoring and metric routing to Dynatrace may
+          be degraded.'
+        summary: Dynatrace ActiveGate has unready replicas
+      expr: |
+        kube_statefulset_status_replicas_ready{namespace="dynatrace"}
+        <
+        kube_statefulset_replicas{namespace="dynatrace"}
+      for: 10m
+      labels:
+        category: dynatrace
+        metric: activegate_availability
+        scope: cluster
+        severity: high
+  - name: cluster-dynatrace-oneagent-alerts
+    rules:
+    - alert: ClusterDynatraceOneAgentUnavailableLow
+      annotations:
+        description: '{{ $value | printf "%.2f" }}% of Dynatrace OneAgent pods are
+          unavailable for more than 10 minutes. Monitoring data from affected nodes
+          is not being collected.'
+        summary: OneAgent unavailability is above 0%
+      expr: |
+        cluster:dynatrace_oneagent_unavailable:percent > 0
+      for: 10m
+      labels:
+        category: dynatrace
+        metric: oneagent_availability
+        scope: cluster
+        severity: low
+    - alert: ClusterDynatraceOneAgentUnavailableMedium
+      annotations:
+        description: '{{ $value | printf "%.2f" }}% of Dynatrace OneAgent pods are
+          unavailable for more than 10 minutes. Monitoring data from affected nodes
+          is not being collected.'
+        summary: OneAgent unavailability is above 10%
+      expr: |
+        cluster:dynatrace_oneagent_unavailable:percent > 10
+      for: 10m
+      labels:
+        category: dynatrace
+        metric: oneagent_availability
+        scope: cluster
+        severity: medium
+    - alert: ClusterDynatraceOneAgentUnavailableHigh
+      annotations:
+        description: '{{ $value | printf "%.2f" }}% of Dynatrace OneAgent pods are
+          unavailable for more than 10 minutes. Monitoring data from affected nodes
+          is not being collected.'
+        summary: OneAgent unavailability is above 25%
+      expr: |
+        cluster:dynatrace_oneagent_unavailable:percent > 25
+      for: 10m
+      labels:
+        category: dynatrace
+        metric: oneagent_availability
+        scope: cluster
+        severity: high
+    - alert: ClusterDynatraceOneAgentUnavailableCritical
+      annotations:
+        description: '{{ $value | printf "%.2f" }}% of Dynatrace OneAgent pods are
+          unavailable for more than 5 minutes. Cluster-wide observability coverage
+          is severely degraded.'
+        summary: OneAgent unavailability is above 50%
+      expr: |
+        cluster:dynatrace_oneagent_unavailable:percent > 50
+      for: 5m
+      labels:
+        category: dynatrace
+        metric: oneagent_availability
+        scope: cluster
+        severity: critical
+  - name: cluster-dynatrace-rollout-alerts
+    rules:
+    - alert: ClusterDynatraceOneAgentRolloutStuck
+      annotations:
+        description: 'DaemonSet {{ $labels.daemonset }} in namespace dynatrace has
+          only {{ $value | printf "%.0f" }} up-to-date pod(s), fewer than desired,
+          for more than 2 hours. OneAgent autoUpdate rollout is stuck (e.g. ImagePullBackOff
+          on some nodes); agent versions are drifting across the cluster.'
+        summary: Dynatrace OneAgent rollout is stuck
+      expr: |
+        kube_daemonset_status_updated_number_scheduled{namespace="dynatrace"}
+        <
+        kube_daemonset_status_desired_number_scheduled{namespace="dynatrace"}
+      for: 2h
+      labels:
+        category: dynatrace
+        metric: rollout_progress
+        scope: cluster
+        severity: medium
+  - name: cluster-dynatrace-pod-restart-alerts
+    rules:
+    - alert: ClusterDynatracePodRestartsMedium
+      annotations:
+        description: 'Pod {{ $labels.pod }} in namespace dynatrace restarted {{ $value
+          | printf "%.0f" }} times in the last hour.'
+        summary: Dynatrace pod restarted more than 3 times in 1 hour
+      expr: |
+        increase(kube_pod_container_status_restarts_total{namespace="dynatrace"}[1h]) > 3
+      for: 5m
+      labels:
+        category: dynatrace
+        metric: pod_restarts
+        scope: cluster
+        severity: medium
+    - alert: ClusterDynatracePodRestartsCritical
+      annotations:
+        description: 'Pod {{ $labels.pod }} in namespace dynatrace restarted {{ $value
+          | printf "%.0f" }} times in the last hour. Dynatrace component is crash-looping.'
+        summary: Dynatrace pod restarted more than 10 times in 1 hour
+      expr: |
+        increase(kube_pod_container_status_restarts_total{namespace="dynatrace"}[1h]) > 10
+      for: 5m
+      labels:
+        category: dynatrace
+        metric: pod_restarts
+        scope: cluster
+        severity: critical

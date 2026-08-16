@@ -1,0 +1,136 @@
+# Complements existing cluster-haproxy-alerts.yaml (frontend 5xx, sessions,
+# backend connection errors). This file covers router availability, reload
+# failures and backend-down conditions.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: cluster-ingress-alerts
+  namespace: openshift-monitoring
+spec:
+  groups:
+  - name: cluster-ingress-recording-rules
+    rules:
+    - expr: |
+        (
+          sum(kube_deployment_status_replicas_available{namespace="openshift-ingress",deployment=~"router-.*"})
+          /
+          sum(kube_deployment_spec_replicas{namespace="openshift-ingress",deployment=~"router-.*"})
+        ) * 100
+      record: cluster:ingress_router_available:percent
+  - name: cluster-ingress-router-availability-alerts
+    rules:
+    - alert: ClusterIngressRouterAvailabilityLow
+      annotations:
+        description: 'Router replica availability is {{ $value | printf "%.2f" }}%
+          for more than 10 minutes. Ingress capacity and redundancy are reduced.'
+        summary: Ingress router availability is below 100%
+      expr: |
+        cluster:ingress_router_available:percent < 100
+      for: 10m
+      labels:
+        category: ingress
+        metric: router_availability
+        scope: cluster
+        severity: low
+    - alert: ClusterIngressRouterAvailabilityHigh
+      annotations:
+        description: 'Router replica availability is {{ $value | printf "%.2f" }}%
+          for more than 10 minutes. Loss of one more replica may cause ingress outage.'
+        summary: Ingress router availability is below 75%
+      expr: |
+        cluster:ingress_router_available:percent < 75
+      for: 10m
+      labels:
+        category: ingress
+        metric: router_availability
+        scope: cluster
+        severity: high
+    - alert: ClusterIngressRouterDown
+      annotations:
+        description: No router replicas are available in openshift-ingress for more
+          than 3 minutes. ALL routes (application and console ingress traffic) are
+          DOWN.
+        summary: All ingress router replicas are down
+      expr: |
+        sum(kube_deployment_status_replicas_available{namespace="openshift-ingress",deployment=~"router-.*"}) == 0
+      for: 3m
+      labels:
+        category: ingress
+        metric: router_availability
+        scope: cluster
+        severity: critical
+  - name: cluster-ingress-reload-alerts
+    rules:
+    - alert: ClusterIngressHAProxyReloadFailHigh
+      annotations:
+        description: 'HAProxy configuration reload is failing on router pod {{ $labels.pod
+          }} for more than 5 minutes. Route changes are NOT being applied; the router
+          is serving a stale configuration. Usually caused by an invalid route/certificate.'
+        summary: HAProxy reload failing on a router pod
+      expr: |
+        template_router_reload_failure == 1
+      for: 5m
+      labels:
+        category: ingress
+        metric: reload_failure
+        scope: cluster
+        severity: high
+    - alert: ClusterIngressHAProxyReloadFailCritical
+      annotations:
+        description: 'HAProxy configuration reload has been failing on router pod
+          {{ $labels.pod }} for more than 30 minutes. Route configuration is stale;
+          new/changed routes and renewed certificates are not live.'
+        summary: HAProxy reload failing for more than 30 minutes
+      expr: |
+        template_router_reload_failure == 1
+      for: 30m
+      labels:
+        category: ingress
+        metric: reload_failure
+        scope: cluster
+        severity: critical
+  - name: namespace-ingress-backend-alerts
+    rules:
+    - alert: NamespaceIngressBackendDown
+      annotations:
+        description: 'All endpoints of HAProxy backend {{ $labels.route }} in namespace
+          {{ $labels.exported_namespace }} are down for more than 10 minutes. The
+          route returns 503 to clients.'
+        summary: Route backend has no healthy endpoints
+      expr: |
+        max by (exported_namespace, route) (haproxy_backend_up) == 0
+      for: 10m
+      labels:
+        category: ingress
+        metric: backend_up
+        scope: namespace
+        severity: medium
+  - name: cluster-ingress-pod-restart-alerts
+    rules:
+    - alert: ClusterIngressRouterRestartsMedium
+      annotations:
+        description: 'Router pod {{ $labels.pod }} restarted {{ $value | printf "%.0f"
+          }} times in the last hour.'
+        summary: Ingress router pod restarted more than 3 times in 1 hour
+      expr: |
+        increase(kube_pod_container_status_restarts_total{namespace="openshift-ingress"}[1h]) > 3
+      for: 5m
+      labels:
+        category: ingress
+        metric: pod_restarts
+        scope: cluster
+        severity: medium
+    - alert: ClusterIngressRouterRestartsCritical
+      annotations:
+        description: 'Router pod {{ $labels.pod }} restarted {{ $value | printf "%.0f"
+          }} times in the last hour. Router is crash-looping; ingress stability is
+          at risk.'
+        summary: Ingress router pod restarted more than 10 times in 1 hour
+      expr: |
+        increase(kube_pod_container_status_restarts_total{namespace="openshift-ingress"}[1h]) > 10
+      for: 5m
+      labels:
+        category: ingress
+        metric: pod_restarts
+        scope: cluster
+        severity: critical

@@ -1,0 +1,213 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: cluster-ovn-alerts
+  namespace: openshift-monitoring
+spec:
+  groups:
+  - name: cluster-ovn-recording-rules
+    rules:
+    - expr: |
+        (
+          sum(kube_daemonset_status_number_unavailable{namespace="openshift-ovn-kubernetes",daemonset="ovnkube-node"})
+          /
+          sum(kube_daemonset_status_desired_number_scheduled{namespace="openshift-ovn-kubernetes",daemonset="ovnkube-node"})
+        ) * 100
+      record: cluster:ovnkube_node_unavailable:percent
+    - expr: |
+        histogram_quantile(0.99,
+          sum by (le) (
+            rate(ovnkube_node_cni_request_duration_seconds_bucket[5m])
+          )
+        )
+      record: cluster:ovn_cni_request_duration_p99:seconds
+    - expr: |
+        sum(increase(ovnkube_resource_retry_failures_total[10m]))
+      record: cluster:ovn_resource_retry_failures:increase10m
+  - name: cluster-ovn-control-plane-alerts
+    rules:
+    - alert: ClusterOvnControlPlaneDegraded
+      annotations:
+        description: 'ovnkube-control-plane has {{ $value | printf "%.0f" }} available
+          replicas, fewer than desired, for more than 10 minutes. OVN cluster manager
+          redundancy is reduced.'
+        summary: OVN control plane has unavailable replicas
+      expr: |
+        kube_deployment_status_replicas_available{namespace="openshift-ovn-kubernetes",deployment="ovnkube-control-plane"}
+        <
+        kube_deployment_spec_replicas{namespace="openshift-ovn-kubernetes",deployment="ovnkube-control-plane"}
+      for: 10m
+      labels:
+        category: ovn
+        metric: control_plane_availability
+        scope: cluster
+        severity: high
+    - alert: ClusterOvnControlPlaneDown
+      annotations:
+        description: ovnkube-control-plane has no available replicas for more than
+          5 minutes. New pod IP allocation and network policy programming for new
+          objects will fail cluster-wide.
+        summary: OVN control plane is down
+      expr: |
+        kube_deployment_status_replicas_available{namespace="openshift-ovn-kubernetes",deployment="ovnkube-control-plane"} == 0
+      for: 5m
+      labels:
+        category: ovn
+        metric: control_plane_availability
+        scope: cluster
+        severity: critical
+  - name: cluster-ovn-node-alerts
+    rules:
+    - alert: ClusterOvnkubeNodeUnavailableLow
+      annotations:
+        description: '{{ $value | printf "%.2f" }}% of ovnkube-node pods are unavailable
+          for more than 10 minutes. Pod networking changes (new pods, services, network
+          policies) are not programmed on affected nodes.'
+        summary: ovnkube-node unavailability is above 0%
+      expr: |
+        cluster:ovnkube_node_unavailable:percent > 0
+      for: 10m
+      labels:
+        category: ovn
+        metric: node_availability
+        scope: cluster
+        severity: low
+    - alert: ClusterOvnkubeNodeUnavailableMedium
+      annotations:
+        description: '{{ $value | printf "%.2f" }}% of ovnkube-node pods are unavailable
+          for more than 10 minutes.'
+        summary: ovnkube-node unavailability is above 10%
+      expr: |
+        cluster:ovnkube_node_unavailable:percent > 10
+      for: 10m
+      labels:
+        category: ovn
+        metric: node_availability
+        scope: cluster
+        severity: medium
+    - alert: ClusterOvnkubeNodeUnavailableHigh
+      annotations:
+        description: '{{ $value | printf "%.2f" }}% of ovnkube-node pods are unavailable
+          for more than 5 minutes.'
+        summary: ovnkube-node unavailability is above 25%
+      expr: |
+        cluster:ovnkube_node_unavailable:percent > 25
+      for: 5m
+      labels:
+        category: ovn
+        metric: node_availability
+        scope: cluster
+        severity: high
+    - alert: ClusterOvnkubeNodeUnavailableCritical
+      annotations:
+        description: '{{ $value | printf "%.2f" }}% of ovnkube-node pods are unavailable
+          for more than 5 minutes. Cluster networking is severely degraded.'
+        summary: ovnkube-node unavailability is above 50%
+      expr: |
+        cluster:ovnkube_node_unavailable:percent > 50
+      for: 5m
+      labels:
+        category: ovn
+        metric: node_availability
+        scope: cluster
+        severity: critical
+  - name: cluster-ovn-cni-latency-alerts
+    rules:
+    - alert: ClusterOvnCniRequestDurationLow
+      annotations:
+        description: 'p99 CNI request duration is {{ $value | printf "%.2f" }}s for
+          more than 15 minutes. Pod startup network setup is slowing down.'
+        summary: OVN CNI p99 latency is above 2.5s
+      expr: |
+        cluster:ovn_cni_request_duration_p99:seconds > 2.5
+      for: 15m
+      labels:
+        category: ovn
+        metric: cni_latency
+        scope: cluster
+        severity: low
+    - alert: ClusterOvnCniRequestDurationMedium
+      annotations:
+        description: 'p99 CNI request duration is {{ $value | printf "%.2f" }}s for
+          more than 15 minutes.'
+        summary: OVN CNI p99 latency is above 5s
+      expr: |
+        cluster:ovn_cni_request_duration_p99:seconds > 5
+      for: 15m
+      labels:
+        category: ovn
+        metric: cni_latency
+        scope: cluster
+        severity: medium
+    - alert: ClusterOvnCniRequestDurationHigh
+      annotations:
+        description: 'p99 CNI request duration is {{ $value | printf "%.2f" }}s for
+          more than 10 minutes. Pod scheduling/startup is visibly delayed.'
+        summary: OVN CNI p99 latency is above 10s
+      expr: |
+        cluster:ovn_cni_request_duration_p99:seconds > 10
+      for: 10m
+      labels:
+        category: ovn
+        metric: cni_latency
+        scope: cluster
+        severity: high
+    - alert: ClusterOvnCniRequestDurationCritical
+      annotations:
+        description: 'p99 CNI request duration is {{ $value | printf "%.2f" }}s for
+          more than 5 minutes. Pod creation is close to timing out (CNI timeout).'
+        summary: OVN CNI p99 latency is above 30s
+      expr: |
+        cluster:ovn_cni_request_duration_p99:seconds > 30
+      for: 5m
+      labels:
+        category: ovn
+        metric: cni_latency
+        scope: cluster
+        severity: critical
+  - name: cluster-ovn-retry-alerts
+    rules:
+    - alert: ClusterOvnResourceRetryFailuresHigh
+      annotations:
+        description: '{{ $value | printf "%.0f" }} OVN resource reconciliation retry
+          failure(s) in the last 10 minutes. Some Kubernetes objects (pods, services,
+          endpoints, network policies) failed to be programmed into OVN after maximum
+          retries and require manual intervention.'
+        summary: OVN resource retry failures detected
+      expr: |
+        cluster:ovn_resource_retry_failures:increase10m > 0
+      for: 5m
+      labels:
+        category: ovn
+        metric: resource_retry_failures
+        scope: cluster
+        severity: high
+  - name: cluster-ovn-pod-restart-alerts
+    rules:
+    - alert: ClusterOvnPodRestartsMedium
+      annotations:
+        description: 'Pod {{ $labels.pod }} in openshift-ovn-kubernetes restarted
+          {{ $value | printf "%.0f" }} times in the last hour.'
+        summary: OVN pod restarted more than 3 times in 1 hour
+      expr: |
+        increase(kube_pod_container_status_restarts_total{namespace="openshift-ovn-kubernetes"}[1h]) > 3
+      for: 5m
+      labels:
+        category: ovn
+        metric: pod_restarts
+        scope: cluster
+        severity: medium
+    - alert: ClusterOvnPodRestartsCritical
+      annotations:
+        description: 'Pod {{ $labels.pod }} in openshift-ovn-kubernetes restarted
+          {{ $value | printf "%.0f" }} times in the last hour. SDN component is crash-looping;
+          cluster networking stability is at risk.'
+        summary: OVN pod restarted more than 10 times in 1 hour
+      expr: |
+        increase(kube_pod_container_status_restarts_total{namespace="openshift-ovn-kubernetes"}[1h]) > 10
+      for: 5m
+      labels:
+        category: ovn
+        metric: pod_restarts
+        scope: cluster
+        severity: critical
